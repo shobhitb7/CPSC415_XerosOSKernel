@@ -1,0 +1,805 @@
+/* Tested by looking at output to see that no "SHOULD RETURN x, RETURNED y" messages appeared */
+/* each block is divided into: General Test Header, Tests Done, Results, Code Used to Test */
+/* Search through each header on this page using ======== (equal signs) or TESTS PASSED*/
+
+======================================================================================
+TESTS PASSED - 1. Test showing prioritization and signals interrupting each other.
+*******************************************
+- sent signals 10,15,30 to a process. Each signal had a different handler. Handler 10 called signal 20 as its last function ->
+  expect signals to be processed as 30, 15, 10, 20.
+*******************************************
+Results:
+Test 1 passed.
+Sending signal 15 to 3
+Test 2 passed.
+Sending signal 30 to 3
+Delivering sigNumber; 30
+Test 3 passed.
+Sending signal 20 to 2
+Delivering sigNumber; 20
+sig_hi process 3 exiting
+Delivering sigNumber; 15
+sig_mid process 3 exiting
+Delivering sigNumber; 10
+sig_lo process 3 exiting
+Sending signal 20 to 3
+Delivering sigNumber; 20
+DONE DONE DONE
+*******************************************
+  unsigned int pid, bg_pid;
+  int rc;
+
+  // Create idle process to prevent dispatch returning
+  bg_pid = syscreate(idle_wait_sig, PROC_STACK);
+
+  // Create a child process that accepts signals of different priorities
+  pid = syscreate(stack_sigtramp, PROC_STACK);
+
+  // Wait for child to set up handlers
+  syssleep(1000);
+
+  // Send signals in increasing priority so sigtramp stacks
+  rc = syskill(pid, 10);
+  if (rc != 0) {
+      kprintf("TEST 1 EXPECT 0, RETURN %d\n", rc);
+  } else {
+      kprintf("Test 1 passed.\n");
+  }
+  //syssleep(1000);
+
+  rc = syskill(pid, 15);
+  if (rc != 0) {
+      kprintf("TEST 2 EXPECT 0, RETURN %d\n", rc);
+  } else {
+      kprintf("Test 2 passed.\n");
+  }
+  //syssleep(1000);
+
+  rc = syskill(pid, 30);
+  if (rc != 0) {
+      kprintf("TEST 3 EXPECT 0, RETURN %d\n", rc);
+  } else {
+      kprintf("Test 3 passed.\n");
+  }
+
+  kprintf("now killinh bg_pid\n");
+  rc = syskill(bg_pid, 20);
+
+  // Give child processes some time to finish first
+  syssleep(5000);
+
+  kprintf("DONE DONE DONE \n");
+
+
+
+======================================================================================
+TESTS PASSED - 2. syssighandler() test case
+*******************************************
+- bad signal (-1, 31, 32) -> expect -1
+- good signal (0, 30)-> expect 0
+- empty invalid new handler -> expect  -2
+- valid new handler -> expect 0
+- valid old and new handler -> expect 0
+*******************************************
+TEST 1 passed
+TEST 2 passed
+TEST 3 passed
+TEST 4 passed
+TEST 4.5 passed
+TEST 5 passed
+TEST 6 passed
+TEST 7 passed
+Done
+*******************************************
+      typedef void (*handler)(void*);
+      int rc; void* ptr; handler old;
+      
+      /* bad signal */
+      rc = syssighandler(-1, NULL, NULL);
+      if (rc != -1 ) {
+          kprintf("TEST 1: WRONG THIS SHOULD RETURN -1 BUT IT RETURNED %d INSTEAD.\n", rc);
+      }
+      kprintf("TEST 1 passed\n");
+
+      /* bad signal */
+      rc = syssighandler(32, NULL, NULL);
+      if (rc != -1 ) {
+          kprintf("TEST 2: WRONG THIS SHOULD RETURN -1 BUT IT RETURNED %d INSTEAD.\n", rc);
+      }
+      kprintf("TEST 2 passed\n");
+
+      /* good signal */
+      rc = syssighandler(0, handler_exit, &old);
+      if (rc != 0) {
+          kprintf("TEST 3: WRONG THIS SHOULD RETURN 0 BUT IT RETURNED %d INSTEAD.\n", rc);
+      }
+      if (old != NULL) {
+          kprintf("TEST 3: WRONG OLD SHOULD BE NULL BUT IT IS %s INSTEAD.\n", old);
+      }
+      kprintf("TEST 3 passed\n");
+
+      /* good signal */
+      rc = syssighandler(30, handler_exit, &old);
+      if (rc != 0) {
+          kprintf("TEST 4: WRONG THIS SHOULD RETURN 0 BUT IT RETURNED %d INSTEAD.\n", rc);
+      }
+      if (old != NULL) {
+          kprintf("TEST 4: WRONG OLD SHOULD BE NULL BUT IT IS %s INSTEAD.\n", old);
+      }
+      kprintf("TEST 4 passed\n");
+
+      /* empty invalid new handler */
+      ptr = kmalloc(sizeof(int) * 4);
+      rc = syssighandler(20, (handler)ptr, &old);
+      kfree(ptr);
+      if (rc != -2) {
+          kprintf("TEST 5: WRONG THIS SHOULD RETURN -2 BUT IT RETURNED %d INSTEAD.\n", rc);
+      }
+      kprintf("TEST 5 passed\n");
+
+      /* valid new handler */
+      rc = syssighandler(20, handler_exit, &old);
+      if (rc != 0) {
+          kprintf("TEST 6: WRONG THIS SHOULD RETURN 0 BUT IT RETURNED %d INSTEAD.\n", rc);
+      }
+      kprintf("TEST 6 passed\n");
+
+      /* valid old and new handlers */
+      rc = syssighandler(20, NULL, &old);
+      if (rc != 0) {
+          kprintf("TEST 7: WRONG THIS SHOULD RETURN 0 BUT IT RETURNED %d INSTEAD.\n", rc);
+      }
+      if ((unsigned int) old != (unsigned int)handler_exit) {
+          kprintf("TEST 7: WRONG THIS SHOULD RETURN %d (old) BUT IT RETURNED %d INSTEAD.\n", handler_exit, old);
+      }
+      kprintf("TEST 7 passed\n");
+
+      /* try to change signal 31*/
+      rc = syssighandler(31, NULL, &old);
+      if (rc != -1) {
+          kprintf("TEST 8: WRONG THIS SHOULD RETURN -1 BUT IT RETURNED %d INSTEAD.\n", rc);
+      }
+      kprintf("TEST 8 passed\n");
+
+      kprintf("Done\n");
+
+
+======================================================================================
+TESTS PASSED - 3. syskill() test case
+*******************************************
+- killing bad PID (-34) ->  expect -512
+- send signal 10 to child process that only exits when receiving signal 20 -> expect -561
+- send signal 20 to child process that only exits when receiving signal 20 -> expect 0
+- invalid signal (-1) -> expect -561
+- send signal to looping process (infinite loop) -> expect 0
+- send signal to blocked process - check that it returns -99 -> expect 0, target process return -99
+- kill regular process-> expect 0
+- try to kill idle process -> expect -512
+*******************************************
+Test 1 passed
+Test 2 passed
+Sending signal 20 to 3
+Test 2.5 passed
+Test 3 passed
+Delivering sigNumber; 20
+Process 003 received signal, calling sysstop now
+waiting now
+Sending signal 20 to 4
+TEST 4 passed.
+State of process: 1
+TEST 4: that pid ret is -99, its return: -99
+Sending signal 20 to 2
+State of the pid at time of signal = 1
+Delivering sigNumber; 20
+Process 002 received signal, calling sysstop now
+Delivering sigNumber; 20
+Process 004 received signal, does nothing
+TEST 5 passed.
+Sending signal 20 to 0
+TEST 6 passed
+done
+*******************************************
+  int rc;
+  unsigned int pid, bg_pid;
+  char buf[128];
+
+  /* Create an idle process to prevent dispatch returning */
+  bg_pid = syscreate(idle_wait_sig, 1024);
+
+  /* killing bad PID */
+  rc = syskill(-34, 20);
+  if (rc != -512) {
+      kprintf("TEST 1 EXPECTED -512, RETURNED %d\n", rc);
+  }
+  kprintf("TEST 1 passed\n");
+
+  /* Create a child process that only exits when receiving signal 20 */
+  pid = syscreate(loop_wait_sig, 1024);
+
+  // Wait for child process to set signal handler
+  syssleep(5000);
+  sysyield();
+  sysyield();
+  sysyield();
+  sysyield();
+
+  // Send an invalid signal
+  rc = syskill(pid, -1);
+  if (rc != -561) {
+      kprintf("TEST 2 EXPECTED -561, RETURNED %d\n", rc);
+  }
+  kprintf("Test 2 passed\n");
+
+  // Send an invalid signal
+  rc = syskill(pid, 10);
+  if (rc != -561) {
+      kprintf("TEST 2.5 EXPECTED -561, RETURNED %d\n", rc);
+  }
+  kprintf("Test 2.5 passed\n");
+
+  // Send signal 20 to looping child process
+  rc = syskill(pid, 20);
+  if (rc != 0) {
+      kprintf("TEST 3 EXPECTED 0, RETURNED %d\n", rc);
+  }
+  kprintf("Test 3 passed\n");
+
+  // Create a child process that blocks receiving, but it is not going to
+  // receive any message because we will interrupt it with a signal
+  pid = syscreate(interrupted_by_sig, 1024);
+
+  // Give time for child process to block
+  syssleep(1000);
+
+  // Kill blocked process
+  pcb* process = findPCB(pid);
+  sprintf(buf, "State of blocked process before kill: %d\n", process->state);
+  sysputs(buf);
+  rc = syskill(pid, 20);
+  if (rc != 0) {
+      kprintf("TEST 4 EXPECTED 0, RETURNED %d\n", rc);
+  }
+  if (process->ret != -99) {
+      kprintf("TEST 4 PROCESS RETURN EXPECTED -99, RETURNED %d\n", process->ret);
+  }
+  kprintf("TEST 4 passed.\n");
+  */
+
+  // kill backgroundpid
+  rc = syskill(bg_pid, 20);
+  if (rc != 0) {
+      kprintf("TEST 5 EXPECTED 0, RETURNED %d\n", rc);
+  }
+  kprintf("TEST 5 passed.");
+
+  /* try to kill idle process */
+  rc = syskill(0, 20);
+  if (rc != -512) {
+      kprintf("TEST 6 EXPECTED -512, RETURNED %d\n", rc);
+  }
+  kprintf("TEST 6 passed\n");
+
+  kprintf("done\n");
+
+
+
+
+======================================================================================
+TESTS PASSED - 4. syssigwait() test case
+**************************************************************************************
+- block a process then have it killed through a signal - also checks that blocked 
+  process returns -99 -> expect target process returns -99, process returns 0
+*******************************************
+Results: 
+Context init called
+state of process pid3 = 24
+Sending signal 20 to 3
+State of the pid at time of signal = 24
+Test 1 passed.
+state of process pid3 = 1
+process ret= -99
+Sending signal 20 to 2
+State of the pid at time of signal = 1
+Delivering sigNumber; 20
+Process 002 received signal, calling sysstop now
+Delivering sigNumber; 20
+Process 003 received signal, does nothing
+done
+*******************************************
+ int rc;
+ unsigned int me, pid, bg_pid;
+
+  // Create idle process to prevent dispatch returning
+  bg_pid = syscreate(idle_wait_sig, 1024);
+  me = sysgetpid();
+
+  // Create a child process that does a sigwait before exiting
+  pid = syscreate(blocked_wait_sig, 1024);
+  pcb* proc = findPCB(pid);
+  kprintf("state of process pid%d = %d\n", proc->pid, proc->state);
+
+  // Wait for child process to set handler and call syssigwait
+  syssleep(1000);
+
+  // TEST: Send signal 20
+  rc = syskill(pid, 20);
+  if (rc != 0) {
+      kprintf ("TEST 1 EXPECTED 0, RETURNED %d\n", rc);
+  } else {
+      kprintf("Test 1 passed.\n");
+  }
+
+  rc = syskill(bg_pid, 20);
+  if (rc != 0) {
+      kprintf ("Bad kill", rc);
+  }
+  
+  kprintf("done\n");
+  sysstop();
+}
+
+
+
+======================================================================================
+TESTS PASSED - 5. sysopen() with invalid arguments
+*******************************************
+- out of bounds (-1, 4)  -> expect -1
+- successul open with device num 0 ->  expect device num 0
+- try to open device num 0 again which should fail -> expect -1
+- try to open device num 1 while device num 0 is open -> expect -1
+- close device num 0  -> expect 0
+- successful open with device num 1 -> expect 1
+*******************************************
+Test 1 passed.
+device no not valid: 4
+Test 2 passed.
+device fd:0
+device opened successfully
+Test 3 passed.
+result of dv open:-1
+Test 4 passed.
+result of dv open:-1
+Test 5 passed.
+Device 0 closed
+device opened successfully
+Test 6 passed
+*******************************************
+  int rc, fd;
+
+  /* out of bounds */
+  rc = sysopen(-1);
+  if (rc != -1) {
+      kprintf("TEST 1 EXPECTED -1, RETURN %d\n", rc);
+  } else {
+      kprintf("Test 1 passed.\n");
+  }
+
+  /* out of bounds */
+  rc = sysopen(4);
+  if (rc != -1) {
+      kprintf("TEST 2 EXPECTED -1, RETURN %d\n", rc);
+  } else {
+      kprintf("Test 2 passed.\n");
+  }
+
+  /* good open with device num 0*/
+  fd = sysopen(0);
+  if (fd != 0) {
+      kprintf("TEST 3 EXPECTED 0, RETURN %d\n", fd);
+  } else {
+      kprintf("Test 3 passed.\n");
+  }
+
+  /* try to open same device again */
+  rc = sysopen(0);
+  if (rc != -1) {
+      kprintf("TEST 4 EXPECTED -1, RETURN %d\n", fd);
+  } else {
+      kprintf("Test 4 passed.\n");
+  }
+
+  /* a device is already opened - cannot open*/
+  rc = sysopen(1);
+  if (rc != -1) {
+      kprintf("TEST 5 EXPECTED -1, RETURN %d\n", fd);
+  } else {
+      kprintf("Test 5 passed.\n");
+  }
+
+  // close the open device
+  rc = sysclose(fd);
+  if (rc != 0) {
+      kprintf("Device 0 didn't close properly\n");
+  } else {
+      kprintf("Device 0 closed\n");
+  }
+
+  //open another device with device num 1 
+  fd = sysopen(1);
+  if (fd != 1) {
+      kprintf("TEST 6 EXPECTED 1, RETURN %d\n", fd);
+  } else {
+      kprintf("Test 6 passed.\n");
+  }
+
+  rc = sysclose(fd);
+  if (rc != 0) {
+      kprintf("Device didn't close properly\n");
+  } else {
+      kprintf("Device closed\n");
+  }
+
+======================================================================================
+TESTS PASSED - 6. syswrite() with invalid file descriptor
+*******************************************
+- invalid fd (-1, 4) -> expect -1
+- no device open -> expect -1
+- device open, write -> expect -1
+*******************************************
+Test 1 passed
+Test 2 passed
+Test 3 passed
+device fd:0
+result of dv open:0
+device opened successfully
+write result:-1
+Test 4 passed
+done
+*******************************************
+  int rc, fd;
+  char buf[128];
+
+  /* invalid fd */
+  fd = -1;
+  rc = syswrite(fd, buf, 128);
+  if (rc != -1) {
+      kprintf("TEST 1 EXPECTED -1, RETURN %d\n", rc);
+  } else {
+      kprintf("Test 1 passed\n");
+  }
+
+  /* invalid fd */
+  fd = 4;
+  rc = syswrite(fd, buf, 128);
+  if (rc != -1) {
+      kprintf("TEST 2 EXPECTED -1, RETURN %d\n", rc);
+  } else {
+      kprintf("Test 2 passed\n");
+  }
+
+  /* no device open */
+  fd = 0;
+  rc = syswrite(fd, buf, 128);
+  if (rc != -1) {
+      kprintf("TEST 3 EXPECTED -1, RETURN %d\n", rc);
+  } else {
+      kprintf("Test 3 passed\n");
+  }
+
+  fd = sysopen(0);
+  if (fd != 0) {
+      kprintf("bad set up\n");
+  }
+
+  /* writes are not supported to keyboard */
+  rc = syswrite(fd, buf, 128);
+  if (rc != -1) {
+      kprintf("TEST 4 EXPECTED -1, RETURN %d\n", rc);
+  } else {
+      kprintf("Test 4 passed\n");
+  }
+
+  rc = sysclose(fd);
+  kprintf("done\n");
+
+
+======================================================================================
+TESTS PASSED - 7. sysioctl() test for invalid commands
+*******************************************
+- sysioctl on unopened device -> return -1 
+- try command 30, -1 -> return -1
+- changed the eof to -1 and did a sysread to ensure proper values
+- create non-echoing keyboard and turn echoing on. did sysread to ensure proper values
+- create echoing keyboard and turn echoing off 
+*******************************************
+Test 1 passed
+device opened successfully
+Test 2 passed
+eof:33
+Test 3 passed.
+Test 4 passed
+device opened successfully
+setting echo to 1
+234
+device opened successfully
+before ioctl, echo was:1
+setting echo to 0
+Test 6 passed.
+Test 7 passed
+done
+*******************************************
+  int rc, fd, fd1;
+  char buf[128];
+  char buf2[128];
+  int cmd;
+
+  /* no device open */
+  fd = 0;
+  rc = sysioctl(fd, 30);
+  if (rc != -1) {
+      kprintf("TEST 1 EXPECT -1, RETURN %d\n", rc);
+  } else {
+      kprintf("Test 1 passed \n");
+  }
+
+  //open device 0
+  fd = sysopen(0);
+
+  /* no such command */
+  rc = sysioctl(fd, 30);
+  if (rc != -1) {
+      kprintf("TEST 2 EXPECT -1, RETURN %d\n", rc);
+  } else {
+      kprintf("Test 2 passed \n");
+  }
+
+  /* change the eof */
+  cmd = 53;
+  rc = sysioctl(fd, cmd, '!');
+  if (rc != 0) {
+      kprintf("TEST 3 EXPECT 0, RETURN %d\n", rc);
+  }
+  if (eof != '!') {
+      kprintf("TEST 3 EXPECT eof %d, RETURN eof %d\n", '!', eof);
+  } else {
+      kprintf("Test 3 passed.\n");
+  }
+
+  // set kbd_buf to read from
+  kbd_buf[0] = '1';
+  kbd_buf[1] = '2';
+  kbd_buf[2] = '3';
+  kbd_buf[3] = '!';
+  kbd_len = 4;
+
+  //read to make sure eof is working
+  rc = sysread(fd, buf, 128);
+  if (rc != 3) {
+      kprintf("TEST 4 EXPECT READ 3, RETURN %d\n", rc);
+  } else  {
+      kprintf("Test 4 passed\n");
+  }
+  buf[rc] = 0;
+  if (strcmp(buf, "123") != 0) {
+      kprintf("TEST 4 EXPECT STRCMP 0, BUF RETURN: %s\n", buf);
+  }
+  //read again should return 0 because reached eof already
+  rc = sysread(fd, buf, 128);
+  if (rc != 0) {
+      kprintf ("TEST 4 EXPECT 0 FROM SYSREAD, RETURN %d\n", rc);
+  }
+
+  //close device
+  rc = sysclose(fd);
+  if (rc != 0) {
+      kprintf ("problem with close\n");
+  }
+
+  kbd_buf[0] = '2';
+  kbd_buf[1] = '3';
+  kbd_buf[2] = '4';
+  kbd_buf[3] = EOF;
+  kbd_len = 4;
+
+  //create non-echoing device
+  fd1 = sysopen(0);
+  if (fd1 != 0) {
+      kprintf("problem opening device 0\n");
+  }
+
+  /* turn echo on */
+  cmd = 56;
+  rc = sysioctl(fd1,cmd);
+  if (rc != 0) {
+      kprintf("TEST 5 EXPECT 0, RETURN %d\n", rc);
+  } 
+  if (!echo) {
+      kprintf("TEST 5 EXPECT echo 1, RETURN echo %d\n", echo);
+  }
+
+  kprintf("This is the eof: %d\n", eof);
+  rc = sysread(fd1, buf2, 128);
+  if (rc != 3) {
+      kprintf("TEST 5 EXPECT READ 3, RETURN %d\n", rc);
+  } 
+  buf2[rc] = 0;
+  if (strcmp(buf2, "234") != 0) {
+      kprintf("TEST 5 EXPECT STRCMP 0, BUF RETURN: %s\n", buf);
+  }
+  rc = sysclose(fd1);
+  if (rc != 0) {
+      kprintf ("problem with close\n");
+  }
+
+  //open device with echoing
+ fd = sysopen(1); 
+ kprintf("before ioctl, echo was:%d\n", echo);
+ // turn off echo
+  cmd = 55;
+  rc = sysioctl(fd, cmd);
+  if (rc != 0) {
+      kprintf("TEST 6 EXPECT 0, RETURN %d\n", rc);
+  } 
+  if (echo) {
+      kprintf("TEST 6 EXPECT echo 0, RETURN echo %d\n", echo);
+  } else {
+      kprintf("Test 6 passed.\n");
+  }
+  
+  /* no such command */
+  rc = sysioctl(fd, -3);
+  if (rc != -1) {
+      kprintf("TEST 7 EXPECT -1, RETURN %d\n", rc);
+  } else {
+      kprintf("Test 7 passed \n");
+  }
+
+  rc = sysclose(fd);
+  if (rc != 0) {
+      kprintf ("problem with close\n");
+  }
+  kprintf("done\n");
+
+
+
+======================================================================================
+TESTS PASSED - 8. sysread() when there are more characters buffered in kernel than the read requests
+*******************************************
+- test more chars buffered in kernel than read requestsa -> return read requests #
+- test fewer chars buffered in kernerl than read requests -> return kernel # char
+- test hitting eof 
+- test sysread again after hitting eof ->  return 0
+- testing blocking sysread -> return # char read
+*******************************************
+Test 1 passed
+TEST 1 after kbd_index:2
+TEST 1 after kbd_len:0
+device opened successfully
+abcdTest 2 passed
+TEST 2 buf: abcd
+TEST 2 after read:4
+TEST 2 after kbd_index:0
+TEST 2 after kbd_len:0
+Sending signal 20 to 2
+State of the pid at time of signal = 1
+device opened successfully
+TEST 3 before read:Delivering sigNumber; 20
+Process 002 received signal, calling sysstop now
+TEST 3 before kbd_index:0
+TEST 3 before kbd_len:4
+set proc return to read:3
+TEST 3 passed.
+TEST 3 buf: abc
+TEST 3 after read:3
+TEST 3 after kbd_index:0
+TEST 3 after kbd_len:0
+Test 4 passed
+*******************************************
+  int rc, fd;
+  char buf[4];
+  char buf1[4];
+  char buf2[4];
+  int bg_pid;
+
+  //open a device
+  fd = sysopen(0);
+
+  // set up keyboard buffer first time
+  kbd_buf[0] = 'a';
+  kbd_buf[1] = 'b';
+  kbd_buf[2] = 'c';
+  kbd_buf[3] = 'd';
+  kbd_len = 2;
+
+  /* test non blocking sysread */
+  rc = sysread(fd, buf, 2);
+  if (rc != 2) {
+      kprintf("TEST 1 EXPECTED 2, RETURNED %d\n", rc);
+  } 
+  buf[rc] = 0;
+  if (strcmp(buf, "ab") != 0){
+      kprintf("TEST 1 EXPECTED STRCMP 0. RETURNED SOMETHING ELSE\n");
+  } else {
+      kprintf("Test 1 passed\n");
+  }
+  kprintf("TEST 1 after kbd_index:%d\n", kbd_index);
+  kprintf("TEST 1 after kbd_len:%d\n", kbd_len);
+  //close device  
+  rc = sysclose(fd);
+  if (rc != 0) {
+      kprintf("prob closing device \n");
+  }
+
+  bg_pid = syscreate(idle_wait_sig, 128);
+
+  //open device
+  fd = sysopen(1);
+
+  /* test blocking sysread */
+  kbd_buf[0] = 'a';
+  kbd_buf[1] = 'b';
+  kbd_buf[2] = 'c';
+  kbd_buf[3] = 'd';
+  kbd_index = 0;
+  kbd_len = 4;
+  rc = sysread(fd, buf1, 128);
+  if (rc < 0) {
+      kprintf("TEST 2 SYSREAD EXPECTED RC >0, RETURNED %d\n", rc);
+  } else {
+      kprintf ("Test 2 passed \n");
+  }
+  buf1[rc] = 0;
+  kprintf("TEST 2 buf: %s\n", buf1);
+  kprintf("TEST 2 after read:%d\n", p_read);
+  kprintf("TEST 2 after kbd_index:%d\n", kbd_index);
+  kprintf("TEST 2 after kbd_len:%d\n", kbd_len);
+
+  //kill background process with sig 2
+  syskill(bg_pid, 20);
+
+  sysclose(fd);
+
+  //set up kbd_buf second time
+  kbd_buf[0] = 'a';
+  kbd_buf[1] = 'b';
+  kbd_buf[2] = 'c';
+  kbd_buf[3] = EOF;
+  kbd_index = 0;
+  kbd_len = 4;
+  //open device
+  fd = sysopen(0);
+
+  /* testing eof */
+  kprintf("TEST 3 before read:%d\n", p_read);
+  kprintf("TEST 3 before kbd_index:%d\n", kbd_index);
+  kprintf("TEST 3 before kbd_len:%d\n", kbd_len);
+  rc = sysread(fd, buf2, 5);
+  if (rc != 3) {
+      kprintf("TEST 3 EXPECT 3, RETURN %d\n", rc);
+  }
+  buf2[rc] = 0;
+  if (strcmp(buf2, "abc") != 0) {
+      kprintf("TEST 3 STRCMP EXPECT 0, RETURNED SOMETHING ELSE:%s\n", buf2);
+  }else {
+      kprintf("TEST 3 passed.\n");
+  }
+  kprintf("TEST 3 buf: %s\n", buf2);
+  kprintf("TEST 3 after read:%d\n", p_read);
+  kprintf("TEST 3 after kbd_index:%d\n", kbd_index);
+  kprintf("TEST 3 after kbd_len:%d\n", kbd_len);
+
+  rc = sysread(fd, buf2, 4);
+  if (rc != 0) {
+      kprintf("TEST 4 EXPECTED 0, RETURNED %d\n", rc);
+  }else {
+      kprintf("Test 4 passed\n");
+  }
+
+  //close device
+  sysclose(fd);
+
+
+
+======================================================================================
+9. Two test cases for scenarios not covered here or in the test program.
+*******************************************
+Please see test cases and descriptions in the headings above. They're all lumped together.
+Few Examples: 
+Trying to open multiple devices at a time.
+Writing when no keyboard available
+
+
+
+======================================================================================
+TODO: open device 0, close 0, open 0 
+TODO: sighandler return -3 when old Handler return invalid address
